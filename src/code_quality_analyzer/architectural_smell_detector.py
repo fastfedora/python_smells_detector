@@ -183,7 +183,8 @@ class ArchitecturalSmellDetector:
 
                 elif isinstance(node, ast.Call):
                     if isinstance(node.func, ast.Attribute):
-                        self.api_usage[module_name].append(node.func.attr)
+                        name, context, context_type = self.resolve_api_call(node.func, local_imports)
+                        self.api_usage[module_name].append((name, context, context_type))
 
                         # Track function calls between modules
                         if isinstance(node.func.value, ast.Name):
@@ -241,6 +242,96 @@ class ArchitecturalSmellDetector:
                     if not self.module_dependencies.in_edges(dependency) and \
                        not self.module_dependencies.out_edges(dependency):
                         self.module_dependencies.remove_node(dependency)
+
+    def resolve_api_call(self, func_node, local_imports):
+        """
+        Resolve API calls to their name, context, and context type based on AST analysis.
+
+        Args:
+            func_node (ast.Name or ast.Attribute): The AST node representing the function call
+            local_imports (list): List of (import_name, line_number) tuples for imported modules
+
+        Returns:
+            tuple: (name, context, context_type) where:
+                - name (str): The function/method name (last element of the path)
+                - context (str): The full API call path for context
+                - context_type (str): The context type indicating how the call was resolved
+
+        Raises:
+            ValueError: If the function node type is not a Name or Attribute.
+
+        Context Types and Examples:
+            - "none": Direct function calls with no object context
+                print("hello") -> ("print", None, "none")
+                len(my_list) -> ("len", None, "none")
+
+            - "imported-symbol": Calls to imported modules/classes
+                sqlite3.connect("db") -> ("connect", "sqlite3", "imported-symbol")
+                requests.get("url") -> ("get", "requests", "imported-symbol")
+
+            - "local-symbol": Calls to local variables or other symbol
+                cursor.execute("sql") -> ("execute", "cursor", "local-symbol")
+                my_list.append("item") -> ("append", "my_list", "local-symbol")
+
+            - "attribute-chain": Chained attribute access
+                obj.subobj.method() -> ("method", "obj.subobj", "attribute-chain")
+                request.headers.get() -> ("get", "request.headers", "attribute-chain")
+
+            - "call-chain": Method calls on function return values
+                hashlib.sha256().hexdigest() -> ("hexdigest", "hashlib.sha256()", "call-chain")
+                datetime.now().strftime("%Y") -> ("strftime", "datetime.now()", "call-chain")
+
+            - "subscript": Method calls on subscripted objects
+                results['errors'].append() -> ("append", "results['errors']", "subscript")
+                data['users'].extend() -> ("extend", "data['users']", "subscript")
+
+            - "expression": Method calls on complex expressions
+                (password + salt).encode() -> ("encode", "<BinOp>", "expression")
+                (obj1 + obj2).method() -> ("method", "<BinOp>", "expression")
+                ", ".join(my_list) -> ("join", "<Constant>", "expression")
+        """
+        if isinstance(func_node, ast.Name):
+            # Direct function call, e.g., print("hello")
+            return (func_node.id, None, "none")
+
+        elif isinstance(func_node, ast.Attribute):
+            method_name = func_node.attr
+
+            if isinstance(func_node.value, ast.Name):
+                symbol = func_node.value.id
+
+                # Check if this is a call to from imported module/class
+                import_info = self._find_import_for_symbol(symbol, local_imports)
+                if import_info:
+                    # Call from imported module/class, e.g., sqlite3.connect("db")
+                    return (method_name, import_info, "imported-symbol")
+                else:
+                    # Call from local variable or other symbol, e.g., cursor.execute("sql")
+                    return (method_name, symbol, "local-symbol")
+
+            elif isinstance(func_node.value, ast.Attribute):
+                # Call from attribute chain, e.g., obj.subobj.method
+                base_path = self._resolve_ast_node(func_node.value)
+                return (method_name, base_path, "attribute-chain")
+
+            elif isinstance(func_node.value, ast.Call):
+                # Call from function call chain, e.g., hashlib.sha256().hexdigest
+                func_call = self._resolve_ast_node(func_node.value)
+                return (method_name, func_call, "call-chain")
+
+            elif isinstance(func_node.value, ast.Subscript):
+                # Call from subscripted object, e.g., results['errors'].append
+                subscript_path = self._resolve_ast_node(func_node.value)
+                return (method_name, subscript_path, "subscript")
+
+            else:
+                # Call from complex expression, e.g., (password + salt).encode()
+                # Since expressions may not group properly, we use the AST node type name instead
+                node_type = type(func_node.value).__name__
+                return (method_name, f"<{node_type}>", "expression")
+
+        else:
+            raise ValueError(f"Unsupported function node type: {type(func_node)}")
 
     def add_smell(self, name, description, file_path, module_class, line_number=None, severity='medium'):
         """
@@ -405,7 +496,7 @@ class ArchitecturalSmellDetector:
             if len(api_calls) >= min_calls:
                 # Count frequency of each API call
                 call_frequency = {}
-                for call in api_calls:
+                for call, context, context_type in api_calls:
                     call_frequency[call] = call_frequency.get(call, 0) + 1
 
                 # Check for highly repetitive calls
@@ -562,6 +653,77 @@ class ArchitecturalSmellDetector:
 
         # Fallback to original directory if no project root found
         return os.path.dirname(start_path) if os.path.isfile(start_path) else start_path
+
+    def _find_import_for_symbol(self, symbol, local_imports):
+        """
+        Find the import that corresponds to a symbol.
+
+        Args:
+            symbol (str): The symbol to find the import for.
+            local_imports (list): List of (import_name, line_number) tuples for imported modules
+
+        Returns:
+            str: The full import path if found, None otherwise.
+        """
+        for import_name, line_no in local_imports:
+            # TODO: Think about whether we want to match on the last part of the imported name.
+            #       This feels like it could match on the wrong thing. [fastfedora 21.Oct.25]
+            # Check if the variable name matches the imported name or its last part
+            if symbol == import_name or symbol == import_name.split('.')[-1]:
+                return import_name
+        return None
+
+    def _resolve_ast_node(self, node):
+        """
+        Resolve any AST node to a string representation.
+
+        Args:
+            node (ast.AST): The AST node to resolve.
+
+        Returns:
+            str: The string representation of the AST node.
+
+        Examples:
+            ast.Name(id='print') -> "print"
+            ast.Attribute(value=ast.Name(id='print'), attr='upper') -> "print.upper"
+            ast.Call(
+                func=ast.Name(id='print'),
+                args=[ast.Constant(value='hello')]
+            ) -> "print()"
+            ast.Subscript(
+                value=ast.Name(id='results'),
+                slice=ast.Index(value=ast.Constant(value='errors'))
+            ) -> "results['errors']"
+            ast.Constant(value='hello') -> "<Constant>"
+        """
+        if isinstance(node, ast.Name):
+            return node.id
+
+        elif isinstance(node, ast.Attribute):
+            return f"{self._resolve_ast_node(node.value)}.{node.attr}"
+
+        elif isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name):
+                return f"{node.func.id}()"
+            elif isinstance(node.func, ast.Attribute):
+                return f"{self._resolve_ast_node(node.func.value)}.{node.func.attr}()"
+            else:
+                raise ValueError(f"Unsupported function node type: {type(node.func)}")
+
+        elif isinstance(node, ast.Subscript):
+            if isinstance(node.slice, ast.Index):  # Python < 3.9
+                key = self._resolve_ast_node(node.slice.value)
+            else:
+                key = self._resolve_ast_node(node.slice)
+            return f"{self._resolve_ast_node(node.value)}[{key}]"
+
+        elif isinstance(node, ast.Constant):
+            return repr(node.value)
+
+        else:
+            # For other complex types, use the AST node type name
+            node_type = type(node).__name__
+            return f"<{node_type}>"
 
 def analyze_architecture(directory_path, config_path):
     """
