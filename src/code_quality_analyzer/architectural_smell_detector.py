@@ -594,7 +594,10 @@ class ArchitecturalSmellDetector:
         excluded_patterns = {'test_', 'setup_', '__init__'}  # Patterns to exclude
 
         for node in self.module_dependencies.nodes():
-            if any(pattern in node for pattern in excluded_patterns):
+            if (
+                any(pattern in node for pattern in excluded_patterns) or
+                node in self.entry_point_modules # Entry points should have high instability
+            ):
                 continue
 
             in_degree = self.module_dependencies.in_degree(node)
