@@ -53,6 +53,7 @@ class ArchitecturalSmellDetector:
         self.api_usage = defaultdict(list)
         self.thresholds = thresholds
         self.file_paths = {}  # New attribute to store file paths
+        self.project_modules = set()
         self.external_dependencies = defaultdict(set)
         self.function_calls = defaultdict(set)  # Track inter-module function calls
 
@@ -144,6 +145,7 @@ class ArchitecturalSmellDetector:
             module_name = os.path.relpath(file_path, project_root)
             module_name = module_name.replace(os.path.sep, '.')[:-3]  # Remove .py extension
             self.module_dependencies.add_node(module_name)
+            self.project_modules.add(module_name)
             self.file_paths[module_name] = file_path
 
             # Track local imports and their line numbers
@@ -206,43 +208,27 @@ class ArchitecturalSmellDetector:
         # Get all project modules
         if not project_root:
             project_root = self._find_project_root(next(iter(self.file_paths.values())))
-        all_modules = set(self.module_dependencies.nodes())
         standard_lib_modules = set(sys.stdlib_module_names)
 
         for module in list(self.module_dependencies.nodes()):
-            for dependency in list(self.module_dependencies.successors(module)):
-                # Check if it's a project module by looking for the file
-                possible_paths = [
-                    os.path.join(project_root, *dependency.split('.')) + '.py',
-                    os.path.join(project_root, dependency.split('.')[0], '__init__.py')
-                ]
-
-                is_project_module = (
-                    dependency in all_modules or
-                    any(os.path.exists(path) for path in possible_paths)
+            if module not in self.project_modules:
+                is_stdlib = any(
+                    module == std_lib or module.startswith(f"{std_lib}.")
+                    for std_lib in standard_lib_modules
                 )
-
-                # Keep project dependencies, handle external ones
-                if not is_project_module:
-                    is_stdlib = any(dependency.startswith(std_lib) for std_lib in standard_lib_modules)
-
+                if is_stdlib:
+                    module_type = 'stdlib'
+                else:
                     try:
-                        spec = importlib.util.find_spec(dependency.split('.')[0])
-                        is_third_party = spec is not None and not is_stdlib
+                        spec = importlib.util.find_spec(module.split('.')[0])
+                        if spec is not None:
+                            module_type = 'third_party'
                     except (ModuleNotFoundError, ValueError):
-                        is_third_party = False
+                        module_type = 'unknown'
 
-                    self.module_dependencies.remove_edge(module, dependency)
-
-                    if is_stdlib:
-                        self.external_dependencies[module].add(('stdlib', dependency))
-                    elif is_third_party:
-                        self.external_dependencies[module].add(('third_party', dependency))
-
-                    # Remove isolated external nodes
-                    if not self.module_dependencies.in_edges(dependency) and \
-                       not self.module_dependencies.out_edges(dependency):
-                        self.module_dependencies.remove_node(dependency)
+                # Convert module to external dependency
+                self.module_dependencies.remove_node(module)
+                self.external_dependencies[module].add((module_type, module))
 
     def resolve_api_call(self, func_node, local_imports):
         """
