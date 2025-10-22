@@ -508,11 +508,11 @@ class ArchitecturalSmellDetector:
                 repetitive_calls = {call: count for call, count in call_frequency.items()
                                   if count >= 3}  # Ignore calls repeated less than 3 times
 
-                if (repetitive_calls and
-                    sum(repetitive_calls.values()) / len(api_calls) > repetition_threshold):
+                repetitive_calls_ratio = sum(repetitive_calls.values()) / len(api_calls)
+                if repetitive_calls_ratio > repetition_threshold:
                     self.add_smell(
                         "Potential Improper API Usage",
-                        f"Module '{module}' has repetitive API calls: " +
+                        f"Module '{module}' has {repetitive_calls_ratio:.1%} repetitive API calls: " +
                         ", ".join(f"{call}({count}x)" for call, count in repetitive_calls.items()),
                         self.file_paths.get(module, "Unknown"),
                         module
