@@ -96,6 +96,14 @@ code_smells:
     explanation: "Comment blocks larger than this may indicate code that needs refactoring."
 
 architectural_smells:
+  USE_FULL_API_CALL_PATH:
+    value: False
+    explanation: "Whether to use the full API call path in the API repetition detection."
+
+  EXCLUDE_API_CALL_PATHS:
+    value: []
+    explanation: "A list of regular expressions to match API call paths to exclude from the API repetition detection (e.g., '\\.(get|append)$' to exclude these calls when using full API call paths)."
+
   GOD_OBJECT_FUNCTIONS:
     value: 20
     explanation: "Modules with more than this many functions may be trying to do too much and should be split."
