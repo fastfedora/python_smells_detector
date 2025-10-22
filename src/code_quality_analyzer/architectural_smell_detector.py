@@ -54,6 +54,7 @@ class ArchitecturalSmellDetector:
         self.thresholds = thresholds
         self.file_paths = {}  # New attribute to store file paths
         self.project_modules = set()
+        self.entry_point_modules = set()
         self.external_dependencies = defaultdict(set)
         self.function_calls = defaultdict(set)  # Track inter-module function calls
 
@@ -147,6 +148,8 @@ class ArchitecturalSmellDetector:
             self.module_dependencies.add_node(module_name)
             self.project_modules.add(module_name)
             self.file_paths[module_name] = file_path
+            if self._is_entry_point(tree):
+                self.entry_point_modules.add(module_name)
 
             # Track local imports and their line numbers
             local_imports = []
@@ -353,6 +356,13 @@ class ArchitecturalSmellDetector:
         min_connections = self.thresholds.get('MIN_HUB_CONNECTIONS', 5)
 
         for node in self.module_dependencies.nodes():
+            # Exclude common infrastructure modules
+            if (
+                any(pattern in node.lower() for pattern in ['util', 'common', 'base', 'core']) or
+                node in self.entry_point_modules # Entry points should be hub-like
+            ):
+                continue
+
             # Count both internal and external dependencies
             in_degree = self.module_dependencies.in_degree(node)
             out_degree = self.module_dependencies.out_degree(node)
@@ -369,10 +379,6 @@ class ArchitecturalSmellDetector:
 
             # Additional checks to reduce false positives
             if is_hub:
-                # Exclude common infrastructure modules
-                if any(pattern in node.lower() for pattern in ['util', 'common', 'base', 'core']):
-                    continue
-
                 # Check if the module has balanced dependencies
                 is_balanced = 0.2 <= fan_in_ratio / (fan_out_ratio + 0.0001) <= 5
 
@@ -588,7 +594,10 @@ class ArchitecturalSmellDetector:
         excluded_patterns = {'test_', 'setup_', '__init__'}  # Patterns to exclude
 
         for node in self.module_dependencies.nodes():
-            if any(pattern in node for pattern in excluded_patterns):
+            if (
+                any(pattern in node for pattern in excluded_patterns) or
+                node in self.entry_point_modules # Entry points should have high instability
+            ):
                 continue
 
             in_degree = self.module_dependencies.in_degree(node)
@@ -618,6 +627,36 @@ class ArchitecturalSmellDetector:
             print("Detected Architectural Smells:")
             for smell in self.architectural_smells:
                 print(f"- {smell}")
+
+    def _is_entry_point(self, ast_tree):
+        """Check if file is likely an entry point."""
+        has_main_guard = False
+        has_argparse = False
+
+        # Check for main guard
+        for node in ast_tree.body:
+            if isinstance(node, ast.If):
+                # Check if condition is __name__ == '__main__'
+                if isinstance(node.test, ast.Compare):
+                    if (
+                        len(node.test.ops) == 1 and
+                        isinstance(node.test.ops[0], ast.Eq) and
+                        isinstance(node.test.left, ast.Name) and
+                        node.test.left.id == '__name__' and
+                        len(node.test.comparators) == 1 and
+                        isinstance(node.test.comparators[0], ast.Constant) and
+                        node.test.comparators[0].value == '__main__'
+                    ):
+                        has_main_guard = True
+
+        # Check for argparse usage
+        for node in ast.walk(ast_tree):
+            if isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Attribute):
+                    if (isinstance(node.func.value, ast.Name) and node.func.value.id == 'argparse'):
+                        has_argparse = True
+
+        return has_main_guard or has_argparse
 
     def _find_project_root(self, start_path):
         """
