@@ -357,7 +357,10 @@ class ArchitecturalSmellDetector:
 
         for node in self.module_dependencies.nodes():
             # Exclude common infrastructure modules
-            if any(pattern in node.lower() for pattern in ['util', 'common', 'base', 'core']):
+            if (
+                any(pattern in node.lower() for pattern in ['util', 'common', 'base', 'core']) or
+                node in self.entry_point_modules # Entry points should be hub-like
+            ):
                 continue
 
             # Count both internal and external dependencies
