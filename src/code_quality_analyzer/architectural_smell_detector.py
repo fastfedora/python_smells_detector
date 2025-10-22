@@ -1,6 +1,7 @@
 import os
 import ast
 import networkx as nx
+import re
 from collections import defaultdict
 import yaml
 from dataclasses import dataclass
@@ -492,6 +493,7 @@ class ArchitecturalSmellDetector:
         min_calls = self.thresholds.get('MIN_API_CALLS', 10)  # Minimum calls to consider
         repetition_threshold = self.thresholds.get('API_REPETITION_THRESHOLD', 0.4)
         use_full_api_call_path = self.thresholds.get('USE_FULL_API_CALL_PATH', False)
+        exclude_api_call_paths = self.thresholds.get('EXCLUDE_API_CALL_PATHS', [])
 
         for module, api_calls in self.api_usage.items():
             if len(api_calls) >= min_calls:
@@ -499,7 +501,8 @@ class ArchitecturalSmellDetector:
                 call_frequency = {}
                 for call, context, context_type in api_calls:
                     call_path = f"{context}.{call}" if use_full_api_call_path and context else call
-                    call_frequency[call_path] = call_frequency.get(call_path, 0) + 1
+                    if not any(re.search(pattern, call_path) for pattern in exclude_api_call_paths):
+                        call_frequency[call_path] = call_frequency.get(call_path, 0) + 1
 
                 # Check for highly repetitive calls
                 repetitive_calls = {call: count for call, count in call_frequency.items()
