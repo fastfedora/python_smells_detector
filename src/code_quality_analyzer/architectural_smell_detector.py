@@ -353,6 +353,10 @@ class ArchitecturalSmellDetector:
         min_connections = self.thresholds.get('MIN_HUB_CONNECTIONS', 5)
 
         for node in self.module_dependencies.nodes():
+            # Exclude common infrastructure modules
+            if any(pattern in node.lower() for pattern in ['util', 'common', 'base', 'core']):
+                continue
+
             # Count both internal and external dependencies
             in_degree = self.module_dependencies.in_degree(node)
             out_degree = self.module_dependencies.out_degree(node)
@@ -369,10 +373,6 @@ class ArchitecturalSmellDetector:
 
             # Additional checks to reduce false positives
             if is_hub:
-                # Exclude common infrastructure modules
-                if any(pattern in node.lower() for pattern in ['util', 'common', 'base', 'core']):
-                    continue
-
                 # Check if the module has balanced dependencies
                 is_balanced = 0.2 <= fan_in_ratio / (fan_out_ratio + 0.0001) <= 5
 
