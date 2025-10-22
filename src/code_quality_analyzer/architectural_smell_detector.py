@@ -54,6 +54,7 @@ class ArchitecturalSmellDetector:
         self.thresholds = thresholds
         self.file_paths = {}  # New attribute to store file paths
         self.project_modules = set()
+        self.entry_point_modules = set()
         self.external_dependencies = defaultdict(set)
         self.function_calls = defaultdict(set)  # Track inter-module function calls
 
@@ -147,6 +148,8 @@ class ArchitecturalSmellDetector:
             self.module_dependencies.add_node(module_name)
             self.project_modules.add(module_name)
             self.file_paths[module_name] = file_path
+            if self.is_entry_point(tree):
+                self.entry_point_modules.add(module_name)
 
             # Track local imports and their line numbers
             local_imports = []
@@ -618,6 +621,36 @@ class ArchitecturalSmellDetector:
             print("Detected Architectural Smells:")
             for smell in self.architectural_smells:
                 print(f"- {smell}")
+
+    def is_entry_point(self, ast_tree):
+        """Check if file is likely an entry point."""
+        has_main_guard = False
+        has_argparse = False
+
+        # Check for main guard
+        for node in ast_tree.body:
+            if isinstance(node, ast.If):
+                # Check if condition is __name__ == '__main__'
+                if isinstance(node.test, ast.Compare):
+                    if (
+                        len(node.test.ops) == 1 and
+                        isinstance(node.test.ops[0], ast.Eq) and
+                        isinstance(node.test.left, ast.Name) and
+                        node.test.left.id == '__name__' and
+                        len(node.test.comparators) == 1 and
+                        isinstance(node.test.comparators[0], ast.Constant) and
+                        node.test.comparators[0].value == '__main__'
+                    ):
+                        has_main_guard = True
+
+        # Check for argparse usage
+        for node in ast.walk(ast_tree):
+            if isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Attribute):
+                    if (isinstance(node.func.value, ast.Name) and node.func.value.id == 'argparse'):
+                        has_argparse = True
+
+        return has_main_guard or has_argparse
 
     def _find_project_root(self, start_path):
         """
