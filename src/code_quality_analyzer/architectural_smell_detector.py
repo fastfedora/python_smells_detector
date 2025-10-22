@@ -148,7 +148,7 @@ class ArchitecturalSmellDetector:
             self.module_dependencies.add_node(module_name)
             self.project_modules.add(module_name)
             self.file_paths[module_name] = file_path
-            if self.is_entry_point(tree):
+            if self._is_entry_point(tree):
                 self.entry_point_modules.add(module_name)
 
             # Track local imports and their line numbers
@@ -628,7 +628,7 @@ class ArchitecturalSmellDetector:
             for smell in self.architectural_smells:
                 print(f"- {smell}")
 
-    def is_entry_point(self, ast_tree):
+    def _is_entry_point(self, ast_tree):
         """Check if file is likely an entry point."""
         has_main_guard = False
         has_argparse = False
